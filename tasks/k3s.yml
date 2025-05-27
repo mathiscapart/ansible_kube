@@ -1,0 +1,62 @@
+- name: "Install package"
+  hosts: all
+  become_user: true
+  tasks:
+    - apt:
+        name:
+          - sudo
+          - vim
+          - curl
+        state: latest
+        update_cache: true
+
+- name: "Install master"
+  hosts: master
+  become_user: true
+  vars:
+    version_k3s: 1.32.5
+    version_nginx: 1.12.2
+    version_longhorn: 1.12.2
+    file_status:
+  tasks:
+    - shell: |
+        k3s --version | grep -o '[0-9]\+\.[0-9]\+\.[0-9]' -m 1
+      register: version
+    - stat:
+        path: /etc/rancher/k3s/k3s.yaml
+      register: file_status
+    - shell: |
+        curl -sfL https://get.k3s.io | INSTALL_K3S_VERSION=v{{ version_k3s }}+k3s1 sh -s - --disable=traefik --disable=servicelb
+      when: not file_status.stat.exists or version.stdout < version_k3s
+    - shell: |
+        cat /var/lib/rancher/k3s/server/node-token
+      register: token
+
+- name: "Install nginx controller"
+  hosts: master
+  become_user: true
+  tasks:
+    - shell: |
+        kubectl apply -f https://raw.githubusercontent.com/kubernetes/ingress-nginx/controller-v{{ version_nginx }}/deploy/static/provider/cloud/deploy.yaml
+
+- name: "Install Longhorn"
+  hosts: master
+  become_user: true
+  tasks:
+    - apt:
+        name:
+          - open-iscsi
+          - nfs-common
+          - cryptsetup
+          - dmsetup
+        state: latest
+        update_cache: true
+    - shell: |
+        kubectl apply -f https://raw.githubusercontent.com/longhorn/longhorn/v{{ version_longhorn }}/deploy/longhorn.yaml
+
+- name: "Install node"
+  hosts: node
+  become_user: true
+  tasks:
+    - shell: |
+        curl -sfL https://get.k3s.io | K3S_URL=https://{{ groups['master'][0] }}:6443 K3S_TOKEN={{ hostvars[groups['master'].0].token.stdout }} sh -
